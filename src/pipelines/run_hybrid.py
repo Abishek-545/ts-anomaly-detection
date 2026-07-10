@@ -45,7 +45,12 @@ SUBMISSION_PATH = config.OUTPUT_DIR / "hybrid_predictions.csv"
 # Fix (Phase 2): 0.85/0.15 was picked once by hand; this reuses scores already
 # computed for both branches, so sweeping costs nothing extra to compute.
 # Round 2: widened to 0.1 steps, still free since it's reusing computed scores.
-CNN_WEIGHT_GRID = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+# Round 4 fix: the grid previously stopped at 0.9, so "pure CNN, no fusion at
+# all" was never a candidate. Once the CNN branch got much stronger
+# (Mahalanobis scoring + F-beta threshold), the sweep kept hitting that 0.9
+# boundary - the classic sign the true optimum lies outside the tested
+# range. Added 1.0 so "don't fuse" can actually be selected when it's best.
+CNN_WEIGHT_GRID = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
 # Round 2: contamination was hand-set (0.2) and never tuned, same issue the
 # fusion weight had. Isolation Forest is cheap to retrain (no epochs), so
