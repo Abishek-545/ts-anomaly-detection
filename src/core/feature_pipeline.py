@@ -6,15 +6,9 @@ import os
 def create_features(train_path, selected_sensors_path):
     print("USING UPDATED FEATURE PIPELINE")
 
-    # ----------------------------
-    # Load selected sensors
-    # ----------------------------
     with open(selected_sensors_path, "r") as f:
         selected_sensors = json.load(f)
 
-    # ----------------------------
-    # Process each series separately
-    # ----------------------------
     all_features = []
 
     files = sorted(
@@ -27,27 +21,16 @@ def create_features(train_path, selected_sensors_path):
             os.path.join(train_path, file_name)
         )
 
-        # Keep only selected sensors
         df = df[selected_sensors].copy()
 
-        # Base feature matrix
         X = df.copy()
 
-        # ----------------------------
-        # Lag features
-        # ----------------------------
         for col in selected_sensors:
             X[f"{col}_lag1"] = X[col].shift(1)
 
-        # ----------------------------
-        # Delta features
-        # ----------------------------
         for col in selected_sensors:
             X[f"{col}_delta"] = X[col] - X[col].shift(1)
 
-        # ----------------------------
-        # Rolling mean
-        # ----------------------------
         for col in selected_sensors:
             X[f"{col}_roll_mean"] = (
                 X[col]
@@ -55,9 +38,6 @@ def create_features(train_path, selected_sensors_path):
                 .mean()
             )
 
-        # ----------------------------
-        # Rolling std
-        # ----------------------------
         for col in selected_sensors:
             X[f"{col}_roll_std"] = (
                 X[col]
@@ -65,9 +45,6 @@ def create_features(train_path, selected_sensors_path):
                 .std()
             )
 
-        # ----------------------------
-        # EWMA
-        # ----------------------------
         for col in selected_sensors:
             X[f"{col}_ewma"] = (
                 X[col]
@@ -75,30 +52,36 @@ def create_features(train_path, selected_sensors_path):
                 .mean()
             )
 
-        # ----------------------------
-        # Interaction features
-        # ----------------------------
         interaction_features = {}
-
         sensor_list = list(selected_sensors)
 
         for i in range(len(sensor_list)):
             for j in range(i + 1, len(sensor_list)):
                 s1 = sensor_list[i]
                 s2 = sensor_list[j]
+                interaction_features[f"{s1}_x_{s2}"] = X[s1] * X[s2]
 
-                interaction_features[
-                    f"{s1}_x_{s2}"
-                ] = X[s1] * X[s2]
+        for i in range(len(sensor_list)):
+            for j in range(i + 1, len(sensor_list)):
+                s1 = sensor_list[i]
+                s2 = sensor_list[j]
+                interaction_features[f"{s1}_minus_{s2}"] = X[s1] - X[s2]
+
+        roll_corr_window = 20
+        for i in range(len(sensor_list)):
+            for j in range(i + 1, len(sensor_list)):
+                s1 = sensor_list[i]
+                s2 = sensor_list[j]
+                interaction_features[f"{s1}_corr_{s2}"] = (
+                    X[s1].rolling(window=roll_corr_window, min_periods=3).corr(X[s2])
+                )
 
         X = pd.concat(
             [X, pd.DataFrame(interaction_features)],
             axis=1
         )
 
-        # ----------------------------
-        # Clean NaNs INSIDE SERIES
-        # ----------------------------
+        X = X.replace([np.inf, -np.inf], np.nan)
         X = (
             X
             .bfill()
@@ -108,9 +91,6 @@ def create_features(train_path, selected_sensors_path):
 
         all_features.append(X)
 
-    # ----------------------------
-    # Concatenate processed series
-    # ----------------------------
     X_clean = pd.concat(
         all_features,
         ignore_index=True
