@@ -3,18 +3,27 @@ import numpy as np
 import json
 import os
 
-def create_features(train_path, selected_sensors_path):
-    print("USING UPDATED FEATURE PIPELINE")
 
-    # ----------------------------
-    # Load selected sensors
-    # ----------------------------
+def create_features(train_path, selected_sensors_path):
+    """Build a per-timestep tabular feature matrix for the density/tree-based
+    detectors (Isolation Forest, LOF).
+
+    Round 5 (teammate's cross-sensor upgrade): on top of the per-sensor
+    lag/delta/rolling/EWMA features, this adds two families of *pairwise*
+    features that capture sensors decoupling from each other - a common
+    signature of process faults that per-sensor features miss:
+      - pairwise differences  (s1_minus_s2)
+      - pairwise rolling correlations (s1_corr_s2, window=20)
+    plus pairwise products (s1_x_s2), kept from the earlier version.
+
+    NOTE: this is a shared module - src.pipelines.run_isolation_forest also
+    calls create_features, so widening the feature set here also changes IF's
+    inputs (~216 -> ~456 features for 16 selected sensors). Evaluate, don't
+    assume, if IF is re-run against this.
+    """
     with open(selected_sensors_path, "r") as f:
         selected_sensors = json.load(f)
 
-    # ----------------------------
-    # Process each series separately
-    # ----------------------------
     all_features = []
 
     files = sorted(
@@ -22,98 +31,54 @@ def create_features(train_path, selected_sensors_path):
     )
 
     for file_name in files:
-
-        df = pd.read_csv(
-            os.path.join(train_path, file_name)
-        )
+        df = pd.read_csv(os.path.join(train_path, file_name))
 
         # Keep only selected sensors
         df = df[selected_sensors].copy()
-
-        # Base feature matrix
         X = df.copy()
 
-        # ----------------------------
-        # Lag features
-        # ----------------------------
+        # ---- Per-sensor temporal features ----
         for col in selected_sensors:
             X[f"{col}_lag1"] = X[col].shift(1)
-
-        # ----------------------------
-        # Delta features
-        # ----------------------------
         for col in selected_sensors:
             X[f"{col}_delta"] = X[col] - X[col].shift(1)
-
-        # ----------------------------
-        # Rolling mean
-        # ----------------------------
         for col in selected_sensors:
-            X[f"{col}_roll_mean"] = (
-                X[col]
-                .rolling(window=5, min_periods=1)
-                .mean()
-            )
-
-        # ----------------------------
-        # Rolling std
-        # ----------------------------
+            X[f"{col}_roll_mean"] = X[col].rolling(window=5, min_periods=1).mean()
         for col in selected_sensors:
-            X[f"{col}_roll_std"] = (
-                X[col]
-                .rolling(window=5, min_periods=1)
-                .std()
-            )
-
-        # ----------------------------
-        # EWMA
-        # ----------------------------
+            X[f"{col}_roll_std"] = X[col].rolling(window=5, min_periods=1).std()
         for col in selected_sensors:
-            X[f"{col}_ewma"] = (
-                X[col]
-                .ewm(span=5)
-                .mean()
-            )
+            X[f"{col}_ewma"] = X[col].ewm(span=5).mean()
 
-        # ----------------------------
-        # Interaction features
-        # ----------------------------
+        # ---- Cross-sensor (pairwise) features ----
         interaction_features = {}
-
         sensor_list = list(selected_sensors)
 
         for i in range(len(sensor_list)):
             for j in range(i + 1, len(sensor_list)):
-                s1 = sensor_list[i]
-                s2 = sensor_list[j]
+                s1, s2 = sensor_list[i], sensor_list[j]
+                interaction_features[f"{s1}_x_{s2}"] = X[s1] * X[s2]
 
-                interaction_features[
-                    f"{s1}_x_{s2}"
-                ] = X[s1] * X[s2]
+        for i in range(len(sensor_list)):
+            for j in range(i + 1, len(sensor_list)):
+                s1, s2 = sensor_list[i], sensor_list[j]
+                interaction_features[f"{s1}_minus_{s2}"] = X[s1] - X[s2]
 
-        X = pd.concat(
-            [X, pd.DataFrame(interaction_features)],
-            axis=1
-        )
+        roll_corr_window = 20
+        for i in range(len(sensor_list)):
+            for j in range(i + 1, len(sensor_list)):
+                s1, s2 = sensor_list[i], sensor_list[j]
+                interaction_features[f"{s1}_corr_{s2}"] = (
+                    X[s1].rolling(window=roll_corr_window, min_periods=3).corr(X[s2])
+                )
 
-        # ----------------------------
-        # Clean NaNs INSIDE SERIES
-        # ----------------------------
-        X = (
-            X
-            .bfill()
-            .ffill()
-            .fillna(0)
-        )
+        X = pd.concat([X, pd.DataFrame(interaction_features)], axis=1)
+
+        # ---- Clean NaNs/inf INSIDE each series (rolling corr + products can
+        # produce inf), before runs are concatenated ----
+        X = X.replace([np.inf, -np.inf], np.nan)
+        X = X.bfill().ffill().fillna(0)
 
         all_features.append(X)
 
-    # ----------------------------
-    # Concatenate processed series
-    # ----------------------------
-    X_clean = pd.concat(
-        all_features,
-        ignore_index=True
-    )
-
+    X_clean = pd.concat(all_features, ignore_index=True)
     return X_clean

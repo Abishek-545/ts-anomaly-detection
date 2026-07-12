@@ -8,6 +8,8 @@ Scripts and notebooks should import from here instead of redefining values.
 
 from pathlib import Path
 
+import numpy as np
+
 # ---------------------------------------------------------------------------
 # Paths (relative to the repository root)
 # ---------------------------------------------------------------------------
@@ -84,6 +86,24 @@ WINDOW_IF_N_ESTIMATORS = 200
 # hand-picked once; it's now chosen per-run by sweeping
 # src.pipelines.run_hybrid.CNN_WEIGHT_GRID against the validation set.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Local Outlier Factor (LOF) — density-based tabular detector (Round 5), a
+# third detector alongside the CNN and Isolation Forest. Fed the same
+# create_features() tabular matrix; anomaly score = -lof.score_samples(X).
+# n_neighbors=200 was selected on validation by the teammate's run_lof sweep.
+# ---------------------------------------------------------------------------
+LOF_N_NEIGHBORS = 200
+
+# ---------------------------------------------------------------------------
+# CNN + LOF score fusion (src.pipelines.run_final_hybrid)
+#
+# The deployed cnn_weight is NOT re-optimized on all of validation; it is the
+# mean of the weight chosen independently in each run-grouped CV fold, to
+# avoid overfitting the single free parameter to a small (10-run) val set.
+# ---------------------------------------------------------------------------
+FUSION_WEIGHT_GRID = np.arange(0, 1.001, 0.05)
+FUSION_CV_FOLDS = 5
 
 # ---------------------------------------------------------------------------
 # Threshold selection
